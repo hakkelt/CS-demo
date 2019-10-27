@@ -257,7 +257,7 @@
 
 			function scale_cube() {
 				var new_scale = parseFloat(z_input.value);
-				if (new_scale <= 0 || new_scale.isNaN()) {
+				if (new_scale <= 0 || new_scale != new_scale) {
 					removeHexahedronText();
 					hexahedron.visible = false;
 					text.visible = false;
