@@ -1,0 +1,487 @@
+<html>
+	<head>
+		<title>Compressive Sampling l0-minimization</title>
+		<style>
+			body { margin: 0; }
+			canvas { width: 100%; height: 100% }
+			.controls {
+				width: 11em;
+				position: fixed;
+				right: 1em;
+				top: 1em;
+				background-color: lightgreen;
+				border-radius: 1em;
+				padding: 0.5em;
+			}
+			input, textarea {
+				display: inline;
+				border: 1px solid #ccc;
+				border-radius: 4px;
+				box-sizing: border-box;
+				padding: 4px;
+				width: 100%;
+				flex-basis: 100%;
+				resize: none;
+			}
+			.invalid {
+				border-color: red;
+			}
+			.textarea-wrapper {
+				margin-left: .5em;
+			}
+			.textarea-comment {
+				margin: 0;
+				font-size: 75%;
+				margin-left: 0.5em;
+			}
+			label {
+				margin-top: 3px;
+			}
+			mjx-container {
+				margin: 0px!important;
+			}
+			.row {
+				margin: 0.5em;
+				display: flex;
+			}
+			#A-label {
+				margin-top:11px;
+			}
+			#y-label {
+				margin-top:12px;
+			}
+			#minimize {
+				padding: .5em;
+				background-color: #008CBA;
+				color: white;
+				border: 2px solid #008CBA;
+				border-radius: 5px;
+				-webkit-transition-duration: 0.4s; /* Safari */
+				transition-duration: 0.4s;
+				cursor: pointer;
+			}
+			#minimize:disabled {
+				cursor: not-allowed;
+			}
+			#minimize:hover {
+				background-color: white;
+				color: black;
+			}
+			.center {
+				justify-content: center;
+			}
+		</style>
+	</head>
+	<body>
+		<div class="controls">
+			<div class="row">
+				<label for="z">$$||\mathbf{z}||_1 = $$</label>
+				<input type="number" name="z" id="z" value="1" step="0.1" min="0.1" max="15">
+			</div>
+			<div class="row">
+				<label for="A" id="A-label">$$\mathbf{A} = $$</label>
+				<div class="textarea-wrapper">
+					<textarea name="A" id="A" rows="2">
+1 0 -1
+0 1 -1</textarea>
+					<p class="textarea-comment" id="A-comment"></p>
+				</div>
+			</div>
+			<div class="row">
+				<label for="y" id="y-label">$$\mathbf{y} = $$</label>
+				<div class="textarea-wrapper">
+					<textarea name="y" id="y" rows="2">
+1
+0</textarea>
+					<p class="textarea-comment" id="y-comment"></p>
+				</div>
+			</div>
+			<div class="row center">
+				<button id="minimize">$$min ||\mathbf{z}||_1 s.t. \mathbf{A} \mathbf{z} = \mathbf{y}$$</button>
+			</div>
+			<div class="row center">
+				<div id="solution-wrapper"><p class="textarea-comment" id="solution"></p></div>
+			</div>
+		</div>
+		<script src="https://polyfill.io/v3/polyfill.min.js?features=es6"></script>
+		<script id="MathJax-script" async src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js"></script>
+		<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/109/three.min.js" integrity="sha256-Wua0LsQkGDEeIkbmBNjj9wcThJh5uCD6R8+5YQhXveQ=" crossorigin="anonymous"></script>
+		<script src="https://unpkg.com/three@0.85.0/examples/js/controls/OrbitControls.js"></script>
+		<script>
+			var scene = new THREE.Scene();
+			scene.background = new THREE.Color( 0xffffff );
+			var camera = new THREE.PerspectiveCamera( 75, window.innerWidth/window.innerHeight, 0.1, 1000 );
+
+			var renderer = new THREE.WebGLRenderer();
+			renderer.setSize( window.innerWidth, window.innerHeight );
+			document.body.appendChild( renderer.domElement );
+
+			var light = new THREE.AmbientLight(0x666666);
+			scene.add(light);
+
+			var directionalLight = new THREE.DirectionalLight( 0xFFFFFF, 1 );
+			directionalLight.position.set( 100, 120, 80 );
+			scene.add( directionalLight );
+			var directionalLight2 = new THREE.DirectionalLight( 0x333333, 1 );
+			directionalLight2.position.set( -50, -120, 20 );
+			scene.add( directionalLight2 );
+
+			var scale = 1;
+			var geometry = new THREE.Geometry();
+
+			geometry.vertices.push(
+				new THREE.Vector3( 1, 0, 0 ),
+				new THREE.Vector3( 0, 1, 0 ),
+				new THREE.Vector3( 0, 0, 1 ),
+				new THREE.Vector3( -1, 0, 0 ),
+				new THREE.Vector3( 0, -1, 0 ),
+				new THREE.Vector3( 0, 0, -1 )
+			);
+			geometry.faces.push( 
+				new THREE.Face3( 1, 2, 0 ),
+				new THREE.Face3( 4, 0, 2 ),
+				new THREE.Face3( 1, 3, 2 ),
+				new THREE.Face3( 3, 4, 2 ),
+				new THREE.Face3( 1, 0, 5 ),
+				new THREE.Face3( 0, 4, 5 ),
+				new THREE.Face3( 3, 1, 5 ),
+				new THREE.Face3( 4, 3, 5 )
+			);
+			geometry.computeFaceNormals();
+
+			var material = new THREE.MeshLambertMaterial ( { color:  0x0000ff, side: THREE.DoubleSide } );
+			var hexahedron = new THREE.Mesh( geometry, material );
+			scene.add( hexahedron );
+
+			var loader = new THREE.FontLoader();
+			var text, font, text2, xlabel, ylabel, zlabel;
+			function removeHexahedronText() {
+				if (text) scene.remove( text );
+			}
+			function createHexahedronText() {
+				removeHexahedronText();
+				var textGeometry = new THREE.TextGeometry( "||z||_ = " + document.getElementById("z").value, {
+					font: font,
+					size: 0.3,
+					height: 0,
+					curveSegments: 12,
+				} );
+				text = new THREE.Mesh( textGeometry, material );
+				text.position.set(0, scale+0.1, 0);
+				scene.add( text );
+			}
+			function createLineText() {
+				var textGeometry = new THREE.TextGeometry( "Az = y", {
+					font: font,
+					size: 0.3,
+					height: 0,
+					curveSegments: 12,
+				} );
+				text2 = new THREE.Mesh( textGeometry, new THREE.MeshLambertMaterial ( { color:  0x000000 } ) );
+				positionLineText();
+				scene.add( text2 );
+			}
+			function positionLineText() {
+				const [A, y] = getInputs()
+				if (wrongInputs(A, y)) return;
+				var position = calcSolution(A,y,scale,false);
+				if ( position)
+					text2.position.copy(position.add(new THREE.Vector3(0,-0.5,0)));
+			}
+			function createAxisText() {
+				var params = {
+					font: font,
+					size: 0.3,
+					height: 0,
+					curveSegments: 12,
+				}
+				var xGeometry = new THREE.TextGeometry( "x", params );
+				xlabel = new THREE.Mesh( xGeometry, new THREE.MeshLambertMaterial ( { color:  0xff0000 } ) );
+				xlabel.position.set(5,0.2,0);
+				var yGeometry = new THREE.TextGeometry( "y", params );
+				ylabel = new THREE.Mesh( yGeometry, new THREE.MeshLambertMaterial ( { color:  0x00ff00 } ) );
+				ylabel.position.set(0,5.2,0);
+				var zGeometry = new THREE.TextGeometry( "z", params );
+				zlabel = new THREE.Mesh( zGeometry, new THREE.MeshLambertMaterial ( { color:  0x0000ff } ) );
+				zlabel.position.set(0,0.2,5);
+				scene.add( xlabel );
+				scene.add( ylabel );
+				scene.add( zlabel );
+			}
+			loader.load( "Lato_Regular_restricted.json", function ( _font ) {
+				font = _font;
+				createHexahedronText();
+				createLineText();
+				createAxisText();
+			} );
+
+			var axesHelper = new THREE.AxesHelper( 5 );
+			scene.add( axesHelper );
+
+			camera.position.x = 2;
+			camera.position.y = 5;
+			camera.position.z = 10;
+
+			var controls = new THREE.OrbitControls( camera, renderer.domElement );
+			controls.addEventListener( 'change', render );
+			window.addEventListener( 'resize', render );
+
+			renderer.render( scene, camera );
+			window.onload = move_line;
+
+			var axis_scale = 1;
+			function render() {
+				if (text) text.lookAt( camera.position );
+				if (text2) text2.lookAt( camera.position );
+				if (xlabel) xlabel.lookAt( camera.position );
+				if (ylabel) ylabel.lookAt( camera.position );
+				if (zlabel) zlabel.lookAt( camera.position );
+				renderer.render( scene, camera );
+			}
+
+			const z_input = document.getElementById("z");
+			z_input.addEventListener("change", scale_cube);
+			z_input.addEventListener("keyup", scale_cube);
+			const A_input = document.getElementById("A");
+			const A_comment = document.getElementById("A-comment");
+			A_input.addEventListener("change", move_line);
+			A_input.addEventListener("keyup", move_line);
+			const y_input = document.getElementById("y");
+			const y_comment = document.getElementById("y-comment");
+			y_input.addEventListener("change", move_line);
+			y_input.addEventListener("keyup", move_line);
+			const minimize_button = document.getElementById("minimize");
+			var button_comment = document.getElementById("solution");
+			const comment_wrapper = document.getElementById("solution-wrapper")
+			minimize_button.addEventListener("click", minimize);
+
+			function scale_cube() {
+				var new_scale = parseFloat(z_input.value);
+				if (new_scale <= 0 || new_scale.isNaN()) {
+					removeHexahedronText();
+					hexahedron.visible = false;
+					text.visible = false;
+				} else {
+					old_scale = scale;
+					scale = new_scale;
+					hexahedron.visible = true;
+					text.visible = true;
+					geometry.scale(scale/old_scale, scale/old_scale, scale/old_scale);
+					createHexahedronText();
+					positionLineText();
+				}
+				render();
+				clearComment();
+			}
+
+			function move_line() {
+				if (line) scene.remove(line);
+				const [A, y] = getInputs()
+				if (wrongInputs(A, y)) return;
+				createLine(A, y);
+				render();
+				clearComment();
+			}
+			var line;
+			function createLine(A, y) {
+				if (line) scene.remove( line );
+				var geometry = new THREE.Geometry();
+				var start = calcSolution( A, y, -8, false );
+				if ( ! start) {
+					text2.visible = false;
+					return;
+				}
+				text2.visible = true;
+				var possible_ends = calcSolutions( A, y, 8 );
+				var end = possible_ends.reduce(
+					( min, current ) => min.distanceTo( start ) < current.distanceTo( start ) ? current : min,
+					possible_ends[0]);
+				geometry.vertices.push( start, end );
+				line = new THREE.Line( geometry, new THREE.LineBasicMaterial( { color: 0x000000, linewidth: 3 } ) );
+				line.geometry.verticesNeedUpdate = true;
+				scene.add( line );
+				positionLineText();
+			}
+			function getInputs() {
+				var A = parseMatrix(A_input.value);
+				var y = parseVector(y_input.value);
+				if (A === false) A_input.classList.add("invalid");
+				else A_input.classList.remove("invalid");
+				if (y === false) y_input.classList.add("invalid");
+				else y_input.classList.remove("invalid");
+				if (A === false || y === false) minimize_button.disabled = true;
+				else minimize_button.disabled = false;
+				return [A, y];
+			}
+			function wrongInputs(A, y) {
+				return A === false || y === false;
+			}
+			function parseMatrix(text) {
+				A_comment.innerText = "";
+				var lines = text.split("\n").filter(item => item.trim() !== "");
+				if (lines.length != 2) {
+					A_comment.innerText = "Matrix must have exactly two rows!";
+					return false;
+				}
+				var values = lines.map(item => item.split(" ").filter(item => item.trim() !== "").map(str => +str));
+				if (values.some(row => row.some(item => Number.isNaN(item)))) {
+					A_comment.innerText = "Matrix can contain only numbers separated by spaces!";
+					return false;
+				}
+				if (values.some(row => row.length != 3)) {
+					A_comment.innerText = "Matrix must have exactly three columns!";
+					return false;
+				}
+				if (values.some(row => row.some(item => Math.abs(item) > 5))) {
+					A_comment.innerText = "Entries of matrix must be less then 5 (in absolute value)!";
+					return false;
+				}
+				return values;
+			}
+			function parseVector(text) {
+				y_comment.innerText = "";
+				var lines = text.split("\n").filter(item => item.trim() !== "");
+				if (lines.length != 2) {
+					y_comment.innerText = "Vector must have exactly two rows!";
+					return false;
+				}
+				if (lines.some(line => line.split(" ").filter(item => item.trim() !== "").length > 1)) {
+					y_comment.innerText = "Vector must have exactly 1 column!";
+					return false;
+				}
+				var values = lines.map(str => +str);
+				if (values.some(item => Number.isNaN(item))) {
+					y_comment.innerText = "Vector can contain only numbers!";
+					return false;
+				}
+				if (values.some(item => Math.abs(item) > 5)) {
+					y_comment.innerText = "Entries of vector must be less then 5 (in absolute value)!";
+					return false;
+				}
+				return values;
+			}
+			function safeEqual(num1, num2) {
+				return Math.abs(num1 - num2) < Number.EPSILON*8; // multiplication by 8 is just for be sure it works
+			}
+			// Highway to (linear algebra) hell! a.k.a. solution for inverse problem
+			// Task: find z vector such that A*z=y
+			// As A is underdetermined (has more columns as rows), there are none or infinite solution
+			// Now we assume that A is R^(2x3), y is R^(2x1), z=[z1 z2 z3] and z1 is known
+			function _calcSolutionByX(A, y, z1) {
+				if (A[0][2] !== 0) { // [ A00 A01 A02!=0; A10 A11 A12 ]
+					if (A[1][2] !== 0) { // [ A00 A01 A02!=0; A10 A11 A12!=0 ]
+						if ( ! safeEqual(A[0][1]/A[0][2] - A[1][1]/A[1][2], 0)){
+							var z2 = ((A[1][0]/A[1][2] - A[0][0]/A[0][2])*z1 + y[0]/A[0][2] - y[1]/A[1][2])/(A[0][1]/A[0][2] - A[1][1]/A[1][2]);
+							var z3 = (y[0] - A[0][0]*z1 - A[0][1]*z2)/A[0][2];
+						} else {
+							return false; // Either zero or infinite solutions
+						}
+					} else { // [ A00 A01 A02!=0; A10 A11 A12=0 ]
+						if (A[1][1] !== 0) { // [ A00 A01 A02!=0; A10 A11!=0 A12=0 ]
+							var z2 = (y[1] - A[1][0]*z1)/A[1][1];
+							var z3 = (y[0] - A[0][0]*z1 - A[0][1]*z2)/A[0][2]; // we are in a branch where A[0][2] != 0
+						} else { // [ A00 A01 A02!=0; A10 A11=0 A12=0 ]
+							return false; // Either zero or infinite solutions
+						}
+					}
+				} else { // [ A00 A01 A02=0; A10 A11 A12 ]
+					if (A[0][1] !== 0 && A[1][2] !== 0) { // [ A00 A01!=0 A02=0; A10 A11 A12!=0 ]
+						var z2 = (y[0] - A[0][0]*z1)/A[0][1];
+						var z3 = (y[1] - A[1][0]*z1 - A[1][1]*z2)/A[1][2];
+					} else { // [ A00 A01=0 A02=0; A10 A11 A12=0 ]
+						return false; // Either zero or infinite solutions
+					}
+				}
+				return [ z1, z2, z3 ];
+			}
+			// Just a wrapper function to create a vector from coordinates
+			function calcSolutionByX(A, y, z1) {
+				var solution = _calcSolutionByX(A, y, z1);
+				return solution ? new THREE.Vector3(...solution) : false;
+			}
+			// Task and assumptions are same as it was in case of _calcSolutionByX except that now z2 is assumed to be known
+			// I use a lazy solution: I switch z1 and z2, and thus the first two columns of A, and then I can use _calcSolutionByX
+			function calcSolutionByY(A, y, z2) {
+				var A_ = A.map(row => [row[1], row[0], row[2]]); // switch first two columns
+				var solution = _calcSolutionByX(A_, y, z2);
+				return solution ? new THREE.Vector3(solution[1], solution[0], solution[2]) : false; // switch back z1 and z2
+			}
+			// Same situation, now z3 is known, so I switch z1 and z3, first and third columns of A
+			function calcSolutionByZ(A, y, z3) {
+				var A_ = A.map(row => [row[2], row[1], row[0]]); // switch first two columns
+				var solution = _calcSolutionByX(A_, y, z3);
+				return solution ? new THREE.Vector3(solution[2], solution[1], solution[0]) : false; // switch back z1 and z3
+			}
+			function calcSolutions(A, y, param) {
+				var possible_solutions = [calcSolutionByX(A, y, param), calcSolutionByY(A, y, param), calcSolutionByZ(A, y, param)];
+				possible_solutions = possible_solutions.filter(item => item);
+				return possible_solutions;
+			}
+			function calcSolution(A, y, param, minimize=true) {
+				var l1_norm = z => z.manhattanLength();
+				var possible_solutions = calcSolutions(A, y, param);
+				var solution_norms = possible_solutions.map(l1_norm);
+				var i = solution_norms.indexOf(minimize ? Math.min(...solution_norms) : Math.max(...solution_norms));
+				if (i == -1) {
+					A_input.classList.add("invalid");
+					minimize_button.disabled = true;
+					A_comment.innerText = "This program can handle only rank-2 matrices!";
+					return false;
+				}
+				return possible_solutions[i];
+			}
+
+			function clearComment() {
+				button_comment.remove();
+			}
+
+			function createComment(text) {
+				clearComment();
+				var p = document.createElement("P");
+				p.setAttribute("id", "solution");
+				p.setAttribute("class", "textarea-comment");
+				p.appendChild(document.createTextNode(text));
+				button_comment = p;
+				comment_wrapper.appendChild(p);
+			}
+
+			// Function checking null space property (the argument is assumed to be a rank-2 matrix)
+			function checkNSP(A) {
+				// The kernel of A is 1-dimensional as A is rank-2 matrix. Let's pick a vector from the kernel other than the null-vector!
+				var kernel = calcSolution(A, [0,0], 5).toArray();
+				// Check 1-NSP
+				return  Math.abs(kernel[0]) < Math.abs(kernel[1]) + Math.abs(kernel[2]) &&
+						Math.abs(kernel[1]) < Math.abs(kernel[0]) + Math.abs(kernel[2]) &&
+						Math.abs(kernel[2]) < Math.abs(kernel[0]) + Math.abs(kernel[1]);
+			}
+
+			var optimal_z, step_size;
+			function minimize() {
+				var [A, y] = getInputs();
+				var solution = calcSolution(A, y, 0);
+				if (solution === false) {
+					createComment("I could not find a solution for some reason...");
+					return;
+				}
+				optimal_z = solution.manhattanLength();
+				var message = checkNSP(A) ? "\\(\\mathbf{A}\\) satisfies the nullspace property for \\(s = 1\\); thus the solution is unique:" : 
+											"\\(\\mathbf{A}\\) doesn't satisfies the nullspace property, so the solution is not unique. A possible solution: ";
+				function change_z() {
+					step_size = (optimal_z - parseFloat(z_input.value))/5;
+					step_size = Math.sign(step_size) * Math.max(Math.abs(step_size), 0.01);
+					z_input.value = Math.round((parseFloat(z_input.value) + step_size)*100)/100;
+					scale_cube();
+					if (Math.abs(parseFloat(z_input.value) - optimal_z) >= 0.01)
+						setTimeout(change_z, 10);
+					else {
+						var [x, y, z] = solution.toArray().map(num => Math.round(num*100)/100);
+						
+						createComment(message + `\\[\\mathbf{z} = [${x}, ${y}, ${z}]\\]`);
+						MathJax.typeset([button_comment]);
+					}
+				}
+				change_z();
+			}
+		</script>
+	</body>
+</html>
